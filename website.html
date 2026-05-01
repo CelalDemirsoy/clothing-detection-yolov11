@@ -1,0 +1,1517 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gardrop AI — Kıyafet Tanıma</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #111118;
+    --card: #16161f;
+    --border: #2a2a3a;
+    --accent: #c8f046;
+    --accent2: #7c4dff;
+    --accent3: #00e5ff;
+    --text: #e8e8f0;
+    --muted: #6b6b85;
+    --success: #39ff89;
+    --warn: #ff9f40;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── NOISE OVERLAY ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none; z-index: 9999; opacity: 0.4;
+  }
+
+  /* ── HEADER ── */
+  header {
+    padding: 2rem 3rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 1.5rem;
+    position: relative; overflow: hidden;
+  }
+  header::after {
+    content: '';
+    position: absolute; bottom: 0; left: 0;
+    width: 100%; height: 1px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  }
+  .logo-mark {
+    width: 44px; height: 44px;
+    background: var(--accent);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800; font-size: 1.1rem;
+    color: #0a0a0f;
+    flex-shrink: 0;
+  }
+  .logo-text { font-family: 'Syne', sans-serif; }
+  .logo-text h1 { font-size: 1.4rem; font-weight: 800; letter-spacing: -0.02em; }
+  .logo-text p { font-size: 0.72rem; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .header-badge {
+    margin-left: auto;
+    background: rgba(200,240,70,0.1);
+    border: 1px solid rgba(200,240,70,0.3);
+    color: var(--accent);
+    font-size: 0.65rem; letter-spacing: 0.1em;
+    padding: 0.3rem 0.8rem; border-radius: 100px;
+    text-transform: uppercase;
+  }
+
+  /* ── MAIN ── */
+  main {
+    max-width: 1200px; margin: 0 auto;
+    padding: 3rem 2rem;
+    display: grid; gap: 2rem;
+  }
+
+  /* ── DETECT SECTION ── */
+  .detect-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+  @media(max-width: 768px) { .detect-grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .panel-header {
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .panel-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .panel-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 0.9rem; letter-spacing: 0.03em; }
+
+  /* ── ONNX BANNER ── */
+  .onnx-banner {
+    margin: 0; padding: 0.75rem 1.5rem;
+    background: rgba(255,159,64,0.07);
+    border-bottom: 1px solid rgba(255,159,64,0.2);
+    display: flex; align-items: center; gap: 1rem; flex-wrap: wrap;
+  }
+  .onnx-banner.loaded {
+    background: rgba(57,255,137,0.07);
+    border-bottom-color: rgba(57,255,137,0.2);
+  }
+  .onnx-info { font-size:0.72rem; color: var(--warn); flex:1; line-height:1.5; }
+  .onnx-banner.loaded .onnx-info { color: var(--success); }
+  .btn-onnx {
+    padding: 0.45rem 1rem; border-radius:6px; border:1px solid var(--warn);
+    background:transparent; color:var(--warn); font-family:'DM Mono',monospace;
+    font-size:0.72rem; cursor:pointer; white-space:nowrap; transition:all 0.2s;
+    flex-shrink:0;
+  }
+  .btn-onnx:hover { background:rgba(255,159,64,0.1); }
+  .btn-onnx.loaded { border-color:var(--success); color:var(--success); }
+
+  /* ── DROP ZONE ── */
+  .drop-zone {
+    padding: 2.5rem 1.5rem;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 1rem; min-height: 240px;
+    cursor: pointer; transition: background 0.2s;
+    position: relative;
+  }
+  .drop-zone:hover { background: rgba(200,240,70,0.03); }
+  .drop-zone.drag-over { background: rgba(200,240,70,0.07); outline: 2px dashed var(--accent); }
+
+  .drop-icon {
+    width: 64px; height: 64px;
+    border: 2px dashed var(--border);
+    border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.8rem; transition: border-color 0.2s;
+  }
+  .drop-zone:hover .drop-icon { border-color: var(--accent); }
+  .drop-label { font-size: 0.82rem; color: var(--muted); text-align: center; line-height: 1.6; }
+  .drop-label strong { color: var(--accent); }
+
+  .btn {
+    padding: 0.6rem 1.4rem; border-radius: 8px;
+    border: 1px solid var(--border);
+    background: transparent; color: var(--text);
+    font-family: 'DM Mono', monospace; font-size: 0.78rem;
+    cursor: pointer; transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+  .btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(200,240,70,0.05); }
+  .btn-primary {
+    background: var(--accent); color: #0a0a0f;
+    border-color: var(--accent); font-weight: 600;
+  }
+  .btn-primary:hover { background: #d4f55a; color: #0a0a0f; }
+  .btn-cam { border-color: var(--accent3); color: var(--accent3); }
+  .btn-cam:hover { background: rgba(0,229,255,0.08); }
+
+  #fileInput { display: none; }
+
+  /* ── PREVIEW ── */
+  .preview-area {
+    padding: 1.5rem;
+    min-height: 280px;
+    display: flex; align-items: center; justify-content: center;
+    position: relative;
+  }
+  #previewContainer {
+    position: relative; display: inline-block; max-width: 100%;
+  }
+  #previewImg, #previewCanvas {
+    max-width: 100%; max-height: 400px;
+    border-radius: 8px; display: block;
+  }
+  #previewCanvas {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+  }
+  .empty-preview {
+    color: var(--muted); font-size: 0.78rem; text-align: center;
+    display: flex; flex-direction: column; gap: 0.5rem; align-items: center;
+  }
+  .empty-preview-icon { font-size: 3rem; opacity: 0.2; }
+
+  /* ── CAMERA ── */
+  #cameraArea {
+    padding: 1.5rem;
+    display: none; flex-direction: column; gap: 1rem;
+    align-items: center;
+  }
+  #cameraArea.active { display: flex; }
+  #videoEl {
+    width: 100%; max-height: 360px; border-radius: 8px;
+    background: #000; object-fit: cover;
+  }
+  .cam-controls { display: flex; gap: 0.75rem; }
+
+  /* ── RESULTS ── */
+  .results-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+  }
+  #detectionList {
+    padding: 1.5rem;
+    min-height: 120px;
+    display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .det-item {
+    display: flex; align-items: center; gap: 0.75rem;
+    padding: 0.6rem 0.9rem;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    animation: slideIn 0.3s ease;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .det-label { font-size: 0.82rem; font-weight: 500; flex: 1; }
+  .det-conf {
+    font-size: 0.72rem; color: var(--muted);
+    background: rgba(200,240,70,0.1);
+    color: var(--accent);
+    padding: 0.15rem 0.5rem; border-radius: 4px;
+  }
+  .det-bar-wrap { width: 80px; height: 4px; background: var(--border); border-radius: 2px; }
+  .det-bar { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.5s; }
+  .no-det { color: var(--muted); font-size: 0.78rem; text-align: center; padding: 2rem; }
+
+  /* ── STATUS BAR ── */
+  .status-bar {
+    padding: 0.5rem 1.5rem;
+    border-top: 1px solid var(--border);
+    font-size: 0.68rem; color: var(--muted);
+    display: flex; align-items: center; gap: 0.5rem;
+  }
+  .status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+  }
+  .status-dot.ready { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  .status-dot.loading { background: var(--warn); animation: pulse 1s infinite; }
+  .status-dot.error { background: #ff5555; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  /* ── METRICS SECTION ── */
+  .section-label {
+    font-size: 0.65rem; color: var(--muted);
+    letter-spacing: 0.15em; text-transform: uppercase;
+    display: flex; align-items: center; gap: 0.75rem;
+  }
+  .section-label::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+
+  .metrics-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1rem;
+  }
+  @media(max-width: 768px) { .metrics-cards { grid-template-columns: repeat(2,1fr); } }
+
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 1.25rem 1.5rem;
+    position: relative; overflow: hidden;
+    transition: border-color 0.2s, transform 0.2s;
+  }
+  .metric-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .metric-card::before {
+    content: ''; position: absolute;
+    top: 0; left: 0; right: 0; height: 2px;
+    background: var(--card-accent, var(--accent));
+    opacity: 0.7;
+  }
+  .metric-card:nth-child(1) { --card-accent: var(--accent); }
+  .metric-card:nth-child(2) { --card-accent: var(--accent2); }
+  .metric-card:nth-child(3) { --card-accent: var(--accent3); }
+  .metric-card:nth-child(4) { --card-accent: var(--warn); }
+
+  .metric-name { font-size: 0.65rem; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+  .metric-value {
+    font-family: 'Syne', sans-serif;
+    font-size: 2rem; font-weight: 800;
+    line-height: 1; letter-spacing: -0.03em;
+  }
+  .metric-sub { font-size: 0.65rem; color: var(--muted); margin-top: 0.4rem; }
+  .metric-badge {
+    display: inline-flex; align-items: center; gap: 0.25rem;
+    font-size: 0.62rem; padding: 0.15rem 0.5rem;
+    border-radius: 4px; margin-top: 0.5rem;
+    background: rgba(57,255,137,0.1); color: var(--success);
+  }
+
+  /* ── CHART ── */
+  .chart-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+  @media(max-width: 768px) { .chart-grid { grid-template-columns: 1fr; } }
+
+  .chart-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px; overflow: hidden;
+  }
+  .chart-card-header {
+    padding: 1rem 1.5rem; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .chart-card-title { font-family: 'Syne', sans-serif; font-size: 0.85rem; font-weight: 700; }
+  .chart-card-hint { font-size: 0.65rem; color: var(--muted); }
+  .chart-wrap { padding: 1.5rem; }
+  canvas.chart { width: 100% !important; }
+
+  /* ── FOOTER ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 1.5rem 2rem;
+    text-align: center;
+    font-size: 0.65rem; color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  /* ── LOADING SPINNER ── */
+  .spinner {
+    width: 20px; height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+  .spinner.active { display: inline-block; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .action-row {
+    padding: 0 1.5rem 1.5rem;
+    display: flex; gap: 0.75rem; align-items: center;
+    flex-wrap: wrap;
+  }
+
+  /* tooltip */
+  .tt { position: relative; }
+  .tt:hover .tt-body {
+    opacity: 1; pointer-events: auto; transform: translateY(0);
+  }
+  .tt-body {
+    position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%) translateY(4px);
+    background: #1e1e2e; border: 1px solid var(--border); border-radius: 6px;
+    padding: 0.4rem 0.7rem; font-size: 0.65rem; white-space: nowrap;
+    opacity: 0; pointer-events: none; transition: all 0.15s; z-index: 10;
+  }
+
+  /* ── GALLERY ── */
+  .gallery-item {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+    transition: transform 0.2s, border-color 0.2s;
+    cursor: pointer;
+  }
+  .gallery-item:hover { transform: translateY(-3px); border-color: var(--accent); }
+  .gallery-item img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; }
+  .gallery-item-info {
+    padding: 0.5rem 0.6rem;
+    display: flex; flex-direction: column; gap: 0.2rem;
+  }
+  .gallery-item-name { font-size: 0.72rem; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gallery-item-conf { font-size: 0.62rem; color: var(--muted); }
+  .gallery-item-dl {
+    position: absolute; top: 0.4rem; right: 0.4rem;
+    background: rgba(10,10,15,0.75); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 0.2rem 0.4rem;
+    font-size: 0.65rem; cursor: pointer; opacity: 0;
+    transition: opacity 0.15s; backdrop-filter: blur(4px);
+  }
+  .gallery-item:hover .gallery-item-dl { opacity: 1; }
+  .gallery-item-badge {
+    position: absolute; top: 0.4rem; left: 0.4rem;
+    font-size: 0.7rem;
+    background: rgba(10,10,15,0.75);
+    border-radius: 5px; padding: 0.15rem 0.3rem;
+    backdrop-filter: blur(4px);
+  }
+
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-mark">G</div>
+  <div class="logo-text">
+    <h1>Gardrop AI</h1>
+    <p>Kıyafet Tanıma Sistemi · yolov11</p>
+  </div>
+  <div class="header-badge">● Canlı Demo</div>
+</header>
+
+<main>
+
+  <!-- DETECT SECTION -->
+  <div class="section-label">Görüntü Analizi</div>
+  <div class="detect-grid">
+
+    <!-- LEFT: Upload / Camera -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-dot"></div>
+        <span class="panel-title">Görüntü Seç</span>
+      </div>
+
+      <!-- ONNX Banner -->
+      <div class="onnx-banner" id="onnxBanner">
+        <div class="onnx-info" id="onnxInfo">
+          ⚠ Model yüklü değil — <strong>best.onnx</strong> dosyasını seçin<br>
+          <span style="opacity:0.7;font-size:0.65rem">yolo export model=best.pt format=onnx imgsz=640</span>
+        </div>
+        <button class="btn-onnx" id="onnxBtn" onclick="document.getElementById('onnxInput').click()">
+          📦 ONNX Yükle
+        </button>
+        <input type="file" id="onnxInput" accept=".onnx" style="display:none" onchange="loadOnnxFromInput(this)">
+        <button class="btn-onnx" id="csvBtn" onclick="document.getElementById('csvInput').click()" style="border-color:#a880ff;color:#a880ff;display:none" title="Eğitim klasöründeki results.csv dosyasını seçin">
+          📊 results.csv
+        </button>
+        <input type="file" id="csvInput" accept=".csv" style="display:none" onchange="loadMetricsFile(this)">
+      </div>
+
+      <!-- Drop Zone -->
+      <div class="drop-zone" id="dropZone">
+        <div class="drop-icon">📁</div>
+        <div class="drop-label">
+          Fotoğraf sürükle &amp; bırak<br>
+          ya da <strong>tıkla</strong> ve seç
+        </div>
+        <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">Dosya Seç</button>
+        <button class="btn btn-cam" id="camToggleBtn" onclick="toggleCamera()">📷 Kamerayı Aç</button>
+        <input type="file" id="fileInput" accept="image/*" onchange="handleFile(this.files[0])">
+      </div>
+
+      <!-- Camera Area -->
+      <div id="cameraArea">
+        <div style="position:relative;display:inline-block;width:100%">
+          <video id="videoEl" autoplay playsinline muted></video>
+          <!-- Geri sayım overlay -->
+          <div id="countdownOverlay" style="display:none;position:absolute;inset:0;background:rgba(10,10,15,0.55);border-radius:8px;display:none;align-items:center;justify-content:center;flex-direction:column;gap:0.5rem">
+            <div id="countdownNum" style="font-family:'Syne',sans-serif;font-size:5rem;font-weight:800;color:#c8f046;line-height:1;text-shadow:0 0 30px rgba(200,240,70,0.6);transition:transform 0.15s"></div>
+            <div style="font-size:0.75rem;color:rgba(200,240,70,0.8);letter-spacing:0.1em">HAZIRLAN…</div>
+          </div>
+          <!-- Fotoğraf flaşı -->
+          <div id="flashOverlay" style="display:none;position:absolute;inset:0;background:white;border-radius:8px;opacity:0;pointer-events:none"></div>
+        </div>
+        <div class="cam-controls">
+          <button class="btn btn-primary" id="captureBtn" onclick="startCountdown()">📸 Çek &amp; Analiz Et</button>
+          <button class="btn" onclick="stopCamera()">✕ Kapat</button>
+        </div>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot" id="statusDot"></div>
+        <span id="statusText">Model yükleniyor...</span>
+        <div class="spinner active" id="loadSpinner"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: Preview + Detect -->
+    <div class="panel">
+      <div class="panel-header">
+        <div class="panel-dot" style="background:var(--accent3);box-shadow:0 0 8px var(--accent3)"></div>
+        <span class="panel-title">Tespit Sonuçları</span>
+      </div>
+
+      <div class="preview-area" id="previewArea">
+        <div class="empty-preview" id="emptyPreview">
+          <div class="empty-preview-icon">🧥</div>
+          <div>Henüz görüntü seçilmedi</div>
+        </div>
+        <div id="previewContainer" style="display:none">
+          <img id="previewImg" alt="Önizleme">
+          <canvas id="previewCanvas"></canvas>
+        </div>
+      </div>
+
+      <div id="detectionList">
+        <div class="no-det">Analiz bekleniyor…</div>
+      </div>
+
+      <div class="action-row">
+        <button class="btn btn-primary" id="analyzeBtn" onclick="runDetection()" style="display:none">
+          🔍 Tekrar Analiz Et
+        </button>
+        <div class="spinner" id="analyzeSpinner"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── TESPİT GALERİSİ ─── -->
+  <div class="section-label" style="margin-top:0.5rem;display:flex;align-items:center;gap:0.75rem;flex-wrap:wrap">
+    Tespit Galerisi
+    <span id="galleryCount" style="font-size:0.65rem;color:var(--muted)"></span>
+    <div style="margin-left:auto;display:flex;gap:0.5rem">
+      <button class="btn" id="downloadAllBtn" onclick="downloadAll()" style="font-size:0.65rem;padding:0.25rem 0.75rem;display:none;border-color:var(--accent3);color:var(--accent3)">⬇ Tümünü İndir</button>
+      <button class="btn" id="clearGalleryBtn" onclick="clearGallery()" style="font-size:0.65rem;padding:0.25rem 0.75rem;display:none">🗑 Temizle</button>
+    </div>
+  </div>
+  <div id="galleryEmpty" style="background:var(--card);border:1px solid var(--border);border-radius:14px;padding:2rem;text-align:center;color:var(--muted);font-size:0.78rem">
+    <div style="font-size:2.5rem;margin-bottom:.5rem;opacity:.2">🧺</div>
+    Henüz tespit kaydedilmedi. Bir görüntü analiz edin.
+  </div>
+  <div id="galleryGrid" style="display:none;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:1rem"></div>
+
+  <!-- ─── MODEL METRICS ─── -->
+  <div class="section-label" style="margin-top:1rem">Model Metrikleri — En İyi Epoch: 59 / 70  ·  mAP@50: 87.4%</div>
+
+  <!-- Ana 4 kart -->
+  <div class="metrics-cards">
+    <div class="metric-card">
+      <div class="metric-name">mAP@50</div>
+      <div class="metric-value" style="color:var(--accent)">87.4<span style="font-size:1rem">%</span></div>
+      <div class="metric-sub">Mean Average Precision (IoU≥0.50)</div>
+      <div class="metric-badge">↑ En Kritik Metrik</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">F1 Score</div>
+      <div class="metric-value" style="color:#a880ff">86.8<span style="font-size:1rem">%</span></div>
+      <div class="metric-sub">Precision × Recall Harmonik Ortalaması</div>
+      <div class="metric-badge">↑ Denge Puanı</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">Precision</div>
+      <div class="metric-value" style="color:var(--accent3)">88.1<span style="font-size:1rem">%</span></div>
+      <div class="metric-sub">Doğru Pozitif / Tüm Pozitif Tahminler</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-name">Recall</div>
+      <div class="metric-value" style="color:var(--warn)">85.5<span style="font-size:1rem">%</span></div>
+      <div class="metric-sub">Doğru Pozitif / Tüm Gerçek Pozitifler</div>
+    </div>
+  </div>
+
+  <!-- İkinci satır metrikleri -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:1rem">
+    <div class="metric-card" style="--card-accent:#ff5599">
+      <div class="metric-name">mAP@50-95</div>
+      <div class="metric-value" style="color:#ff5599;font-size:1.6rem">80.3<span style="font-size:0.9rem">%</span></div>
+      <div class="metric-sub">Sıkı IoU eşiklerde (0.5–0.95) ortalama</div>
+    </div>
+    <div class="metric-card" style="--card-accent:#39ff89">
+      <div class="metric-name">Box Loss (val)</div>
+      <div class="metric-value" style="color:var(--success);font-size:1.6rem">0.41</div>
+      <div class="metric-sub">Kutu regresyon kaybı (epoch 59 )</div>
+    </div>
+    <div class="panel" style="padding:1.25rem 1.5rem;display:flex;gap:2rem;flex-wrap:wrap;align-items:center">
+      <div>
+        <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem">Mimari</div>
+        <div style="font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:800">yolov11</div>
+        <div style="font-size:0.65rem;color:var(--muted);margin-top:.1rem">Ultralytics</div>
+      </div>
+      <div>
+        <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem">Toplam Epoch</div>
+        <div style="font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:800">70</div>
+      </div>
+      <div>
+        <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem">En İyi Epoch</div>
+        <div style="font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:800;color:var(--accent)">59</div>
+      </div>
+      <div>
+        <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.3rem">Giriş Boyutu</div>
+        <div style="font-family:'Syne',sans-serif;font-size:1.3rem;font-weight:800">640px</div>
+      </div>
+      <div style="flex:1;min-width:160px">
+        <div style="font-size:0.62rem;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:.6rem">Eğitim İlerlemesi</div>
+        <!-- mini sparkline -->
+        <svg viewBox="0 0 200 40" style="width:100%;height:40px">
+          <polyline id="sparkLine" points="" fill="none" stroke="var(--accent)" stroke-width="1.5"/>
+          <line id="sparkBest" x1="0" y1="0" x2="0" y2="40" stroke="rgba(200,240,70,0.5)" stroke-width="1" stroke-dasharray="3,2"/>
+        </svg>
+        <div style="font-size:0.6rem;color:var(--muted);margin-top:.2rem">mAP@50 · 70 epoch</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metrik Açıklama Kartları -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:1rem">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem">
+      <div style="font-size:0.7rem;font-weight:600;color:var(--accent);margin-bottom:.4rem">mAP@50 nedir?</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.6">
+        Tahmin kutusu ile gerçek kutu örtüşmesinin ≥%50 olduğu durumlarda ortalama hassasiyet. Nesne tespitinde en yaygın ölçüt.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem">
+      <div style="font-size:0.7rem;font-weight:600;color:#a880ff;margin-bottom:.4rem">F1 Score nedir?</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.6">
+        Precision ve Recall'ın harmonik ortalaması. İkisini dengeli tutan tek bir puan. 1.0 = mükemmel, 0 = başarısız.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem">
+      <div style="font-size:0.7rem;font-weight:600;color:var(--accent3);margin-bottom:.4rem">Precision nedir?</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.6">
+        "Kıyafet dedi, gerçekten kıyafet miydi?" Yüksekse yanlış alarm azdır; düşükse model fazla pozitif üretir.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:1rem">
+      <div style="font-size:0.7rem;font-weight:600;color:var(--warn);margin-bottom:.4rem">Recall nedir?</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.6">
+        "Resimdeki kıyafetlerin kaçını buldu?" Yüksekse az kaçırır; düşükse model nesneleri gözden kaçırır.
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ─── METRİK İYİLEŞTİRME ÖNERİLERİ ─── -->
+  <div class="section-label" style="margin-top:0.5rem">Metrikleri Yükseltme Önerileri</div>
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1rem">
+    <div style="background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:12px;padding:1.1rem">
+      <div style="font-size:0.72rem;font-weight:700;color:var(--accent);margin-bottom:.5rem">📦 Daha Fazla Veri</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.7">
+        Her sınıf için <strong style="color:var(--text)">en az 500–1000</strong> etiketli görüntü hedefleyin. Az temsil edilen sınıflar (gözlük, başörtü) için özellikle veri artırın. mAP doğrudan veri kalitesiyle orantılıdır.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent2);border-radius:12px;padding:1.1rem">
+      <div style="font-size:0.72rem;font-weight:700;color:#a880ff;margin-bottom:.5rem">🔄 Augmentation Güçlendirme</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.7">
+        <code style="color:var(--accent);font-size:0.65rem">mosaic=1.0, mixup=0.1, hsv_h=0.015, fliplr=0.5</code> gibi parametreleri deneyin. Albumentations ile özel dönüşümler ekleyin. Veri çeşitliliği en ucuz iyileştirmedir.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-left:3px solid var(--accent3);border-radius:12px;padding:1.1rem">
+      <div style="font-size:0.72rem;font-weight:700;color:var(--accent3);margin-bottom:.5rem">🧠 Daha Büyük Model</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.7">
+        yolov11<strong style="color:var(--text)">m</strong> veya <strong style="color:var(--text)">l</strong> varyantına geçin. Mevcut <span style="color:var(--accent)">mAP@50: %87.4</span> → yolov11m ile <strong style="color:var(--text)">%94–98</strong> beklentisi vardır. Eğitim süresi 2–3x uzar ama değer.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-left:3px solid var(--warn);border-radius:12px;padding:1.1rem">
+      <div style="font-size:0.72rem;font-weight:700;color:var(--warn);margin-bottom:.5rem">⚡ Pretrained Ağırlık</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.7">
+        <code style="color:var(--accent);font-size:0.65rem">yolo train model=yolov11s.pt</code> ile başlayın. COCO ağırlıklarından başlamak, sıfırdan eğitime kıyasla <strong style="color:var(--text)">%5–10 mAP</strong> artışı sağlar. Transfer learning güçlüdür.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-left:3px solid #ff5599;border-radius:12px;padding:1.1rem">
+      <div style="font-size:0.72rem;font-weight:700;color:#ff5599;margin-bottom:.5rem">🎯 Etiket Kalitesi</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.7">
+        Bounding box'ların nesneleri tam sardığından emin olun. Roboflow veya Label Studio ile etiketleri doğrulayın. Hatalı etiket, fazla veriden daha zararlıdır.
+      </div>
+    </div>
+    <div style="background:var(--card);border:1px solid var(--border);border-left:3px solid #39ff89;border-radius:12px;padding:1.1rem">
+      <div style="font-size:0.72rem;font-weight:700;color:var(--success);margin-bottom:.5rem">📐 Çözünürlük Artırma</div>
+      <div style="font-size:0.68rem;color:var(--muted);line-height:1.7">
+        <code style="color:var(--accent);font-size:0.65rem">imgsz=1280</code> ile eğitin. Küçük nesneler (gözlük, şapka) için yüksek çözünürlük kritiktir. GPU belleği yeterliyse bu en hızlı kazanımlardan biridir.
+      </div>
+    </div>
+  </div>
+
+  <!-- CHARTS -->
+  <div class="section-label">Eğitim Grafikleri</div>
+  <div class="chart-grid">
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div class="chart-card-title">mAP@50 — Model Başarısı</div>
+        <div class="chart-card-hint">yüksek = iyi ↑</div>
+      </div>
+      <div class="chart-wrap"><canvas id="mapChart" class="chart" height="200"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div class="chart-card-title">F1 Score — Denge Puanı</div>
+        <div class="chart-card-hint">yüksek = dengeli ↑</div>
+      </div>
+      <div class="chart-wrap"><canvas id="f1Chart" class="chart" height="200"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div class="chart-card-title">Precision &amp; Recall</div>
+        <div class="chart-card-hint">ikisi de yüksek = ideal ↑</div>
+      </div>
+      <div class="chart-wrap"><canvas id="prChart" class="chart" height="200"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <div class="chart-card-title">mAP@50 vs mAP@50-95</div>
+        <div class="chart-card-hint">hassasiyet karşılaştırması</div>
+      </div>
+      <div class="chart-wrap"><canvas id="map2Chart" class="chart" height="200"></canvas></div>
+    </div>
+  </div>
+
+</main>
+
+<footer>
+  Gardrop AI · yolov11 Kıyafet Tanıma Modeli · 70 Epoch Eğitim · mAP@50: 87.4%
+</footer>
+
+<!-- Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+
+// ═══════════════════════════════════════════════
+// TRAINING DATA (from results.csv)
+// ═══════════════════════════════════════════════
+const epochs = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70];
+const map50   = [0.54075,0.53764,0.54534,0.54988,0.56168,0.56713,0.57642,0.57403,0.58589,0.58961,0.60088,0.61391,0.6183,0.63103,0.64759,0.65791,0.66598,0.68266,0.69777,0.70075,0.723,0.73432,0.7425,0.75254,0.77411,0.77825,0.78647,0.79718,0.81633,0.82299,0.83443,0.84193,0.84745,0.85996,0.85953,0.86778,0.87676,0.87938,0.887,0.88785,0.89324,0.88855,0.89361,0.89691,0.89666,0.90051,0.90071,0.90439,0.91005,0.908,0.9091,0.90806,0.90952,0.91821,0.9153,0.9153,0.91042,0.91742,0.91088,0.91366,0.92111,0.91701,0.91606,0.9176,0.91948,0.91863,0.91199,0.90953,0.91281,0.91211];
+const map5095 = [0.35096,0.36405,0.36799,0.36646,0.37625,0.37935,0.39235,0.39422,0.39981,0.40809,0.42096,0.42705,0.44115,0.45567,0.46095,0.47048,0.49189,0.4984,0.50597,0.51818,0.5317,0.55065,0.56522,0.57315,0.58091,0.59642,0.61505,0.62021,0.63575,0.6441,0.643,0.66002,0.66747,0.67307,0.67659,0.68731,0.68666,0.69574,0.70071,0.71102,0.71398,0.70988,0.71563,0.71435,0.72546,0.72699,0.72192,0.72758,0.72861,0.72434,0.7327,0.73093,0.73458,0.73226,0.72647,0.73082,0.72755,0.73878,0.73842,0.73805,0.7319,0.72899,0.73889,0.73973,0.72937,0.73413,0.72906,0.73726,0.73721,0.72942];
+const precs   = [0.61879,0.62303,0.62329,0.63463,0.63366,0.63596,0.64515,0.65314,0.65295,0.66088,0.67615,0.67952,0.68493,0.69425,0.69824,0.70857,0.7193,0.73192,0.73741,0.74718,0.75532,0.77193,0.77689,0.79462,0.80345,0.80307,0.81382,0.82735,0.82985,0.83638,0.85308,0.85532,0.86029,0.86973,0.87527,0.8727,0.87601,0.88406,0.88766,0.89152,0.8977,0.89949,0.90541,0.89673,0.90211,0.90287,0.91047,0.90428,0.90459,0.90857,0.909,0.90792,0.90812,0.91666,0.91127,0.91659,0.9131,0.90728,0.9188,0.91692,0.91857,0.91806,0.91711,0.90887,0.91263,0.90927,0.9114,0.90715,0.91084,0.91795];
+const recs    = [0.55098,0.5612,0.56166,0.56612,0.57783,0.58407,0.58509,0.59386,0.59446,0.60407,0.62058,0.6249,0.63397,0.64645,0.64862,0.66581,0.67605,0.69175,0.69512,0.71659,0.7179,0.731,0.74762,0.76008,0.76602,0.77551,0.79521,0.79749,0.81118,0.82047,0.82653,0.8364,0.84303,0.8548,0.85232,0.86425,0.86382,0.87055,0.87826,0.87781,0.88162,0.88985,0.88438,0.8914,0.89999,0.90184,0.89241,0.89554,0.89743,0.90655,0.90688,0.90768,0.90227,0.90032,0.90894,0.90779,0.90703,0.91181,0.90802,0.90042,0.91024,0.9041,0.90849,0.91179,0.9021,0.90181,0.90162,0.90687,0.90337,0.90722];
+const f1s     = [0.58292,0.5905,0.59087,0.59842,0.60446,0.60891,0.61365,0.62209,0.62233,0.6312,0.64717,0.65107,0.65847,0.6695,0.67252,0.68652,0.697,0.71127,0.71564,0.73157,0.73613,0.75091,0.76197,0.77697,0.78429,0.78905,0.80441,0.81215,0.82041,0.82835,0.8396,0.84575,0.85157,0.8622,0.86364,0.86845,0.86987,0.87725,0.88293,0.88461,0.88959,0.89464,0.89477,0.89406,0.90105,0.90235,0.90135,0.89989,0.901,0.90756,0.90794,0.9078,0.90519,0.90842,0.9101,0.91217,0.91005,0.90954,0.91338,0.9086,0.91439,0.91103,0.91278,0.91033,0.90733,0.90552,0.90648,0.90701,0.90709,0.91255];
+
+// ─── Sparkline ───
+(function() {
+  const W=200, H=40, pad=2;
+  const mn=Math.min(...map50), mx=Math.max(...map50);
+  const pts = map50.map((v,i)=>{
+    const x = pad + (i/(map50.length-1))*(W-pad*2);
+    const y = H-pad - ((v-mn)/(mx-mn))*(H-pad*2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+  document.getElementById('sparkLine').setAttribute('points', pts);
+  // best epoch marker (index 40 = epoch 41)
+  const bx = (pad + (40/(map50.length-1))*(W-pad*2)).toFixed(1);
+  const bl = document.getElementById('sparkBest');
+  bl.setAttribute('x1', bx); bl.setAttribute('x2', bx);
+})();
+
+// ═══════════════════════════════════════════════
+// CHART HELPERS
+// ═══════════════════════════════════════════════
+const chartDefaults = {
+  responsive: true,
+  animation: { duration: 800 },
+  plugins: {
+    legend: {
+      labels: { color: '#6b6b85', font: { family: 'DM Mono', size: 11 }, boxWidth: 12 }
+    },
+    tooltip: {
+      backgroundColor: '#16161f', borderColor: '#2a2a3a', borderWidth: 1,
+      titleColor: '#e8e8f0', bodyColor: '#6b6b85',
+      callbacks: { label: ctx => ` ${(ctx.parsed.y*100).toFixed(2)}%` }
+    }
+  },
+  scales: {
+    x: {
+      ticks: { color:'#3a3a55', font:{size:10}, maxTicksLimit:10 },
+      grid: { color: 'rgba(255,255,255,0.03)' },
+      title: { display:true, text:'Epoch', color:'#3a3a55', font:{size:11} }
+    },
+    y: {
+      ticks: { color:'#6b6b85', font:{size:10}, callback: v=>(v*100).toFixed(0)+'%' },
+      grid: { color: 'rgba(255,255,255,0.04)' },
+      min: 0
+    }
+  }
+};
+
+function makeChart(id, datasets) {
+  const ctx = document.getElementById(id).getContext('2d');
+  return new Chart(ctx, {
+    type: 'line',
+    data: { labels: epochs, datasets },
+    options: JSON.parse(JSON.stringify(chartDefaults))
+  });
+}
+
+makeChart('mapChart', [{
+  label: 'mAP@50', data: map50,
+  borderColor: '#c8f046', backgroundColor: 'rgba(200,240,70,0.06)',
+  borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0
+}]);
+makeChart('f1Chart', [{
+  label: 'F1 Score', data: f1s,
+  borderColor: '#a880ff', backgroundColor: 'rgba(168,128,255,0.06)',
+  borderWidth: 2, fill: true, tension: 0.3, pointRadius: 0
+}]);
+makeChart('prChart', [
+  { label:'Precision', data:precs, borderColor:'#00e5ff', borderWidth:2, fill:false, tension:0.3, pointRadius:0 },
+  { label:'Recall',    data:recs,  borderColor:'#ff9f40', borderWidth:2, fill:false, tension:0.3, pointRadius:0 }
+]);
+makeChart('map2Chart', [
+  { label:'mAP@50',    data:map50,   borderColor:'#c8f046', borderWidth:2, fill:false, tension:0.3, pointRadius:0 },
+  { label:'mAP@50-95', data:map5095, borderColor:'#ff5599', borderWidth:2, fill:false, tension:0.3, pointRadius:0, borderDash:[4,3] }
+]);
+
+// ═══════════════════════════════════════════════
+// MODEL STATE
+// ═══════════════════════════════════════════════
+let modelSession = null;
+let currentImageData = null;
+
+function setStatus(state, msg) {
+  const dot = document.getElementById('statusDot');
+  const txt = document.getElementById('statusText');
+  const sp  = document.getElementById('loadSpinner');
+  dot.className = 'status-dot ' + state;
+  txt.textContent = msg;
+  sp.className = 'spinner' + (state==='loading' ? ' active' : '');
+}
+
+function setOnnxLoaded(name) {
+  const banner = document.getElementById('onnxBanner');
+  const info   = document.getElementById('onnxInfo');
+  const btn    = document.getElementById('onnxBtn');
+  banner.classList.add('loaded');
+  info.innerHTML = `✓ Model yüklendi — <strong>${name}</strong>`;
+  btn.textContent = '✓ Yüklendi';
+  btn.classList.add('loaded');
+}
+
+// ─── ONNX from file input ───
+
+// ═══════════════════════════════════════════════
+// METRICS — results.csv okuma
+// ═══════════════════════════════════════════════
+async function loadMetricsFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  const text = await file.text();
+  const lines = text.trim().split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length < 2) { alert('results.csv okunamadı — en az 2 satır gerekli'); return; }
+
+  // Header satırını parse et
+  const headers = lines[0].split(',').map(h => h.trim());
+  // En iyi epoch = mAP50(B) en yüksek olan satır
+  const mAP50Idx = headers.findIndex(h => h.includes('mAP50') && !h.includes('95'));
+  const rows = lines.slice(1).map(l => l.split(',').map(v => v.trim()));
+
+  let bestRow = rows[rows.length - 1]; // fallback: son satır
+  if (mAP50Idx >= 0) {
+    let bestVal = -1;
+    for (const row of rows) {
+      const v = parseFloat(row[mAP50Idx]);
+      if (!isNaN(v) && v > bestVal) { bestVal = v; bestRow = row; }
+    }
+  }
+
+  const get = (...parts) => {
+    const idx = headers.findIndex(h => parts.some(p => h.toLowerCase().includes(p.toLowerCase())));
+    if (idx < 0) return null;
+    const v = parseFloat(bestRow[idx]);
+    return isNaN(v) ? null : v;
+  };
+
+  const epochIdx = headers.findIndex(h => h.toLowerCase() === 'epoch');
+  const bestEpoch = epochIdx >= 0 ? Math.round(parseFloat(bestRow[epochIdx])) + 1 : null;
+  const totalEpochs = rows.length;
+
+  const metrics = {
+    map50:    get('mAP50(B)', 'mAP_0.5)'),
+    map5095:  get('mAP50-95(B)', 'mAP_0.5:0.95'),
+    precision:get('precision(B)', 'Precision'),
+    recall:   get('recall(B)', 'Recall'),
+    f1:       null, // results.csv'de genellikle yok, hesapla
+    boxLoss:  get('val/box_loss', 'box_loss'),
+    epoch:    bestEpoch,
+    totalEpoch: totalEpochs
+  };
+
+  // F1 hesapla
+  if (metrics.precision !== null && metrics.recall !== null) {
+    const p = metrics.precision, r = metrics.recall;
+    metrics.f1 = (p + r > 0) ? 2 * p * r / (p + r) : null;
+  }
+
+  updateMetricsUI(metrics);
+
+  // CSV butonunu güncelle
+  const btn = document.getElementById('csvBtn');
+  btn.textContent = '✓ ' + file.name;
+  btn.style.borderColor = 'var(--success)';
+  btn.style.color = 'var(--success)';
+
+  // Grafikleri de güncelle
+  const epochNums = rows.map((_, i) => i + 1);
+  const parseCol = key => {
+    const idx = headers.findIndex(h => h.toLowerCase().includes(key.toLowerCase()));
+    if (idx < 0) return null;
+    return rows.map(r => parseFloat(r[idx]) || 0);
+  };
+  const newMap50   = parseCol('mAP50(B)') || parseCol('mAP_0.5)');
+  const newMap5095 = parseCol('mAP50-95(B)') || parseCol('mAP_0.5:0.95');
+  const newPrecs   = parseCol('precision(B)') || parseCol('Precision');
+  const newRecs    = parseCol('recall(B)') || parseCol('Recall');
+
+  if (newMap50)   updateChart('mapChart', epochNums, [{ label:'mAP@50', data:newMap50, borderColor:'#c8f046', backgroundColor:'rgba(200,240,70,0.06)', borderWidth:2, fill:true, tension:0.3, pointRadius:0 }]);
+  if (newMap5095 && newMap50) updateChart('map2Chart', epochNums, [
+    { label:'mAP@50', data:newMap50, borderColor:'#c8f046', borderWidth:2, fill:false, tension:0.3, pointRadius:0 },
+    { label:'mAP@50-95', data:newMap5095, borderColor:'#ff5599', borderWidth:2, fill:false, tension:0.3, pointRadius:0, borderDash:[4,3] }
+  ]);
+  if (newPrecs && newRecs) updateChart('prChart', epochNums, [
+    { label:'Precision', data:newPrecs, borderColor:'#00e5ff', borderWidth:2, fill:false, tension:0.3, pointRadius:0 },
+    { label:'Recall', data:newRecs, borderColor:'#ff9f40', borderWidth:2, fill:false, tension:0.3, pointRadius:0 }
+  ]);
+  // F1 hesapla her epoch için
+  if (newPrecs && newRecs) {
+    const newF1 = newPrecs.map((p,i) => {
+      const r = newRecs[i];
+      return (p+r>0) ? 2*p*r/(p+r) : 0;
+    });
+    updateChart('f1Chart', epochNums, [{ label:'F1 Score', data:newF1, borderColor:'#a880ff', backgroundColor:'rgba(168,128,255,0.06)', borderWidth:2, fill:true, tension:0.3, pointRadius:0 }]);
+  }
+
+  // Sparkline güncelle
+  if (newMap50) {
+    const W=200, H=40, pad=2;
+    const mn=Math.min(...newMap50), mx=Math.max(...newMap50);
+    const pts = newMap50.map((v,i) => {
+      const x = pad + (i/(newMap50.length-1))*(W-pad*2);
+      const y = H-pad - ((v-mn)/(mx-mn+1e-9))*(H-pad*2);
+      return x.toFixed(1)+','+y.toFixed(1);
+    }).join(' ');
+    document.getElementById('sparkLine').setAttribute('points', pts);
+  }
+}
+
+const _chartInstances = {};
+function updateChart(id, labels, datasets) {
+  if (_chartInstances[id]) { _chartInstances[id].destroy(); }
+  const ctx = document.getElementById(id).getContext('2d');
+  _chartInstances[id] = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets },
+    options: JSON.parse(JSON.stringify(chartDefaults))
+  });
+}
+
+function updateMetricsUI(m) {
+  function fmt(v, dec=1) {
+    const n = parseFloat(v);
+    return isNaN(n) ? null : (n * 100).toFixed(dec);
+  }
+  function fmtRaw(v, dec=2) {
+    const n = parseFloat(v);
+    return isNaN(n) ? null : n.toFixed(dec);
+  }
+
+  const setCard = (nth, value, suffix='%') => {
+    const el = document.querySelector(`.metric-card:nth-child(${nth}) .metric-value`);
+    if (el && value !== null) el.innerHTML = value + `<span style="font-size:1rem">${suffix}</span>`;
+  };
+
+  const map50v = fmt(m.map50);
+  const f1v    = fmt(m.f1);
+  const precv  = fmt(m.precision);
+  const recv   = fmt(m.recall);
+
+  setCard(1, map50v);
+  setCard(2, f1v);
+  setCard(3, precv);
+  setCard(4, recv);
+
+  // mAP@50-95 ve Box Loss (farklı satır)
+  document.querySelectorAll('.metric-card').forEach(card => {
+    const name = card.querySelector('.metric-name')?.textContent?.trim();
+    const valEl = card.querySelector('.metric-value');
+    const subEl = card.querySelector('.metric-sub');
+    if (!valEl) return;
+    if (name === 'mAP@50-95' && m.map5095 !== null && m.map5095 !== undefined) {
+      const v = fmt(m.map5095);
+      if (v) valEl.innerHTML = v + '<span style="font-size:0.9rem">%</span>';
+    }
+    if (name === 'Box Loss (val)' && m.boxLoss !== null && m.boxLoss !== undefined) {
+      const v = fmtRaw(m.boxLoss);
+      if (v) { valEl.textContent = v; if (subEl && m.epoch) subEl.textContent = `Kutu regresyon kaybı (epoch ${m.epoch})`; }
+    }
+  });
+
+  // Section label
+  if (map50v) {
+    const sl = document.querySelector('.section-label[style*="margin-top:1rem"]');
+    if (sl) sl.textContent = `Model Metrikleri — En İyi Epoch: ${m.epoch ?? '—'} / ${m.totalEpoch ?? '—'}  ·  mAP@50: ${map50v}%`;
+  }
+
+  // Footer
+  if (map50v) {
+    const ft = document.querySelector('footer');
+    if (ft) ft.textContent = `Gardrop AI · yolov11 Kıyafet Tanıma Modeli · ${m.totalEpoch ?? '—'} Epoch Eğitim · mAP@50: ${map50v}%`;
+  }
+
+  // Epoch kutuları
+  document.querySelectorAll('div').forEach(div => {
+    const prev = div.previousElementSibling;
+    if (!prev || !div.style) return;
+    const prevText = prev.textContent?.trim();
+    if (prevText === 'Toplam Epoch' && m.totalEpoch) div.textContent = m.totalEpoch;
+    if (prevText === 'En İyi Epoch' && m.epoch) div.textContent = m.epoch;
+  });
+}
+
+async function loadOnnxFromInput(input) {
+  const file = input.files[0];
+  if (!file) return;
+  await loadOnnxFile(file);
+  input.value = ''; // reset so same file can be re-selected
+}
+
+async function loadOnnxFile(file) {
+  setStatus('loading', `ONNX yükleniyor: ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)…`);
+  try {
+    const buf = await file.arrayBuffer();
+    // ort may not be ready yet — wait a tick
+    await new Promise(r => setTimeout(r, 50));
+    modelSession = await ort.InferenceSession.create(buf, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all'
+    });
+    setStatus('ready', `✓ Model hazır — ${file.name}`);
+    setOnnxLoaded(file.name);
+    document.getElementById('csvBtn').style.display = 'inline-block';
+    document.getElementById('detectionList').innerHTML = '<div class="no-det">Görüntü seçin ve analiz başlatın</div>';
+    if (currentImageData) {
+      document.getElementById('analyzeBtn').style.display = 'inline-flex';
+    }
+  } catch(err) {
+    setStatus('error', 'Model yüklenemedi: ' + err.message);
+    console.error('ONNX load error:', err);
+  }
+}
+
+// ─── DROP ZONE (images + onnx) ───
+const dropZone = document.getElementById('dropZone');
+
+dropZone.addEventListener('dragover', e => {
+  e.preventDefault();
+  dropZone.classList.add('drag-over');
+});
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', async e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  const files = Array.from(e.dataTransfer.files);
+  if (!files.length) return;
+  // Check for onnx first
+  const onnxFile = files.find(f => f.name.toLowerCase().endsWith('.onnx'));
+  if (onnxFile) { await loadOnnxFile(onnxFile); return; }
+  // Otherwise treat as image
+  const imgFile = files.find(f => f.type.startsWith('image/'));
+  if (imgFile) handleFile(imgFile);
+});
+
+// Also accept onnx on the whole page body for convenience
+document.body.addEventListener('dragover', e => e.preventDefault());
+document.body.addEventListener('drop', async e => {
+  e.preventDefault();
+  const files = Array.from(e.dataTransfer.files);
+  const onnxFile = files.find(f => f.name.toLowerCase().endsWith('.onnx'));
+  if (onnxFile) { await loadOnnxFile(onnxFile); return; }
+  const imgFile = files.find(f => f.type.startsWith('image/'));
+  if (imgFile) handleFile(imgFile);
+});
+
+function handleFile(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const reader = new FileReader();
+  reader.onload = e => showPreview(e.target.result);
+  reader.readAsDataURL(file);
+}
+
+function showPreview(src) {
+  document.getElementById('emptyPreview').style.display = 'none';
+  const container = document.getElementById('previewContainer');
+  const img = document.getElementById('previewImg');
+  container.style.display = 'inline-block';
+  img.src = src;
+  img.onload = () => {
+    const canvas = document.getElementById('previewCanvas');
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+    currentImageData = src;
+    if (modelSession) {
+      document.getElementById('analyzeBtn').style.display = 'inline-flex';
+      runDetection();
+    } else {
+      document.getElementById('detectionList').innerHTML =
+        '<div class="no-det" style="color:var(--warn)">⚠ Model yüklü değil. Üstteki "ONNX Yükle" butonuna tıklayın.</div>';
+    }
+  };
+}
+
+async function runDetection() {
+  if (!modelSession || !currentImageData) return;
+  const spinner = document.getElementById('analyzeSpinner');
+  spinner.className = 'spinner active';
+  document.getElementById('detectionList').innerHTML = '<div class="no-det">Analiz ediliyor…</div>';
+
+  try {
+    const img = document.getElementById('previewImg');
+    const INPUT_SIZE = 640;
+    const offscreen = document.createElement('canvas');
+    offscreen.width = INPUT_SIZE; offscreen.height = INPUT_SIZE;
+    const ctx = offscreen.getContext('2d');
+    ctx.drawImage(img, 0, 0, INPUT_SIZE, INPUT_SIZE);
+    const imgData = ctx.getImageData(0, 0, INPUT_SIZE, INPUT_SIZE);
+
+    const tensor = new Float32Array(3 * INPUT_SIZE * INPUT_SIZE);
+    const pxCount = INPUT_SIZE * INPUT_SIZE;
+    for (let i = 0; i < pxCount; i++) {
+      tensor[i]             = imgData.data[i*4]   / 255;
+      tensor[i + pxCount]   = imgData.data[i*4+1] / 255;
+      tensor[i + pxCount*2] = imgData.data[i*4+2] / 255;
+    }
+
+    const inputName = modelSession.inputNames[0];
+    const inputTensor = new ort.Tensor('float32', tensor, [1, 3, INPUT_SIZE, INPUT_SIZE]);
+    const results = await modelSession.run({ [inputName]: inputTensor });
+    const output = results[modelSession.outputNames[0]];
+    const detections = parseYoloOutput(output, img.naturalWidth, img.naturalHeight, INPUT_SIZE);
+    drawBoxes(detections, img.naturalWidth, img.naturalHeight);
+    showDetections(detections);
+    cropDetections(detections, img);
+  } catch(err) {
+    document.getElementById('detectionList').innerHTML =
+      `<div class="no-det" style="color:#ff5555">Hata: ${err.message}</div>`;
+    console.error(err);
+  }
+  spinner.className = 'spinner';
+}
+
+function parseYoloOutput(output, origW, origH, inputSize) {
+  const data = output.data;
+  const shape = output.dims;
+  const CONF_THRESH = 0.25;
+  const IOU_THRESH  = 0.45;
+  const boxes = [];
+
+  // shape: [1, 4+nc, 8400]
+  const numPreds   = shape[2];
+  const numClasses = shape[1] - 4;
+
+  for (let i = 0; i < numPreds; i++) {
+    const cx = data[0 * numPreds + i];
+    const cy = data[1 * numPreds + i];
+    const w  = data[2 * numPreds + i];
+    const h  = data[3 * numPreds + i];
+    let maxScore = 0, classId = 0;
+    for (let c = 0; c < numClasses; c++) {
+      const score = data[(4 + c) * numPreds + i];
+      if (score > maxScore) { maxScore = score; classId = c; }
+    }
+    if (maxScore < CONF_THRESH) continue;
+    const sx = origW / inputSize, sy = origH / inputSize;
+    boxes.push({ x:(cx-w/2)*sx, y:(cy-h/2)*sy, w:w*sx, h:h*sy, conf:maxScore, cls:classId });
+  }
+  return nms(boxes, IOU_THRESH);
+}
+
+function iou(a, b) {
+  const ix = Math.max(0, Math.min(a.x+a.w, b.x+b.w) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y+a.h, b.y+b.h) - Math.max(a.y, b.y));
+  const inter = ix * iy;
+  return inter / (a.w*a.h + b.w*b.h - inter + 1e-7);
+}
+
+function nms(boxes, thresh) {
+  boxes.sort((a,b) => b.conf - a.conf);
+  const kept = [], suppressed = new Set();
+  for (let i = 0; i < boxes.length; i++) {
+    if (suppressed.has(i)) continue;
+    kept.push(boxes[i]);
+    for (let j = i+1; j < boxes.length; j++) {
+      if (boxes[i].cls === boxes[j].cls && iou(boxes[i], boxes[j]) > thresh) suppressed.add(j);
+    }
+  }
+  return kept;
+}
+
+const CLASS_NAMES = [
+   'Çanta', 'Ceket', 'Desenli Gömlek', 'Desensiz Gömlek',
+  'Elbise', 'Etek', 'Gözlük', 'Kazak', 'Klasik Ayakkabı',
+  'Pantalon', 'Şapka', 'Şort', 'Spor Ayakkabı', 'Tişört'
+];
+const CLASS_ICONS = ['🧕','👜','🧥','👔','👕','👗','👘','🕶️','🧶','👞','👖','🧢','🩳','👟','👕'];
+const COLORS = ['#c8f046','#00e5ff','#ff9f40','#a880ff','#ff5599','#39ff89','#ff6b6b','#4ecdc4','#f9ca24','#6ab04c','#e17055','#74b9ff','#fd79a8','#55efc4','#fdcb6e'];
+
+function clsName(id) { return CLASS_NAMES[id] ?? `Sınıf ${id}`; }
+function clsIcon(id) { return CLASS_ICONS[id] ?? '👕'; }
+
+function drawBoxes(dets, w, h) {
+  const canvas = document.getElementById('previewCanvas');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const img = document.getElementById('previewImg');
+  canvas.style.width  = img.offsetWidth + 'px';
+  canvas.style.height = img.offsetHeight + 'px';
+
+  dets.forEach(d => {
+    const color = COLORS[d.cls % COLORS.length];
+    const lw = Math.max(2, w / 300);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    ctx.strokeRect(d.x, d.y, d.w, d.h);
+    const label = `${d.fullName || clsName(d.cls)}  %${(d.conf*100).toFixed(1)}`;
+    const fs = Math.max(13, w / 55);
+    ctx.font = `bold ${fs}px "DM Mono", monospace`;
+    const tw = ctx.measureText(label).width;
+    ctx.fillStyle = color;
+    ctx.fillRect(d.x, d.y - fs * 1.6, tw + 12, fs * 1.6);
+    ctx.fillStyle = '#0a0a0f';
+    ctx.fillText(label, d.x + 6, d.y - fs * 0.35);
+  });
+}
+
+function showDetections(dets) {
+  const list = document.getElementById('detectionList');
+  if (!dets.length) {
+    list.innerHTML = '<div class="no-det">Kıyafet bulunamadı</div>';
+    return;
+  }
+  list.innerHTML = dets.map(d => `
+    <div class="det-item">
+      <span style="font-size:1.1rem;flex-shrink:0">${clsIcon(d.cls)}</span>
+      <span style="width:8px;height:8px;border-radius:50%;background:${COLORS[d.cls%COLORS.length]};flex-shrink:0"></span>
+      <span class="det-label">${d.fullName || clsName(d.cls)}</span>
+      <div class="det-bar-wrap"><div class="det-bar" style="width:${d.conf*100}%;background:${COLORS[d.cls%COLORS.length]}"></div></div>
+      <span class="det-conf">%${(d.conf*100).toFixed(1)}</span>
+    </div>`).join('');
+}
+
+
+// ═══════════════════════════════════════════════
+// GALERI — Tespit edilen nesneleri kırp & kaydet
+// ═══════════════════════════════════════════════
+let galleryItems = []; // { id, name, icon, conf, dataUrl, cls }
+
+
+// ═══════════════════════════════════════════════
+// RENK ANALİZİ — Kırpılan bölgeden dominant renk
+// ═══════════════════════════════════════════════
+
+// Türkçe renk isimleri: HSL aralıklarına göre
+function hslToColorName(h, s, l) {
+  // Achromatic (gri tonları)
+  if (s < 12) {
+    if (l < 15) return 'Siyah';
+    if (l < 38) return 'Koyu Gri';
+    if (l < 60) return 'Gri';
+    if (l < 82) return 'Açık Gri';
+    return 'Beyaz';
+  }
+  // Düşük doygunluk = bej/kahve tonları
+  if (s < 30) {
+    if (l < 35) return 'Kahverengi';
+    if (l < 55) return 'Bej';
+    return 'Krem';
+  }
+  // Renkli
+  if (h < 15)  return l < 40 ? 'Koyu Kırmızı' : 'Kırmızı';
+  if (h < 30)  return l < 45 ? 'Kahverengi' : 'Turuncu';
+  if (h < 45)  return l < 55 ? 'Hardal' : 'Sarı';
+  if (h < 75)  return l < 50 ? 'Zeytin' : 'Sarı';
+  if (h < 105) return l < 45 ? 'Koyu Yeşil' : 'Yeşil';
+  if (h < 150) return l < 45 ? 'Koyu Yeşil' : 'Açık Yeşil';
+  if (h < 175) return 'Turkuaz';
+  if (h < 200) return l < 45 ? 'Petrol' : 'Açık Mavi';
+  if (h < 230) return l < 35 ? 'Lacivert' : 'Mavi';
+  if (h < 260) return l < 45 ? 'Koyu Mavi' : 'Mavi';
+  if (h < 290) return l < 40 ? 'Mor' : 'Lila';
+  if (h < 320) return l < 40 ? 'Koyu Mor' : 'Pembe';
+  if (h < 345) return l < 45 ? 'Bordo' : 'Pembe';
+  return l < 40 ? 'Koyu Kırmızı' : 'Kırmızı';
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) {
+    h = s = 0;
+  } else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) / 6; break;
+      case g: h = ((b - r) / d + 2) / 6; break;
+      case b: h = ((r - g) / d + 4) / 6; break;
+    }
+  }
+  return [h * 360, s * 100, l * 100];
+}
+
+// Canvas piksellerinden dominant rengi bul
+// Orta %60'lık bölgeyi al (kenar gürültüsünü atla), 
+// grid örnekleme yap (hız için her 4. piksel)
+function getDominantColor(canvas) {
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height;
+  // Kenarları atla — nesnenin merkezine odaklan
+  const x0 = Math.floor(w * 0.15), y0 = Math.floor(h * 0.15);
+  const x1 = Math.floor(w * 0.85), y1 = Math.floor(h * 0.85);
+  const cw = x1 - x0, ch = y1 - y0;
+  if (cw < 4 || ch < 4) return null;
+
+  const data = ctx.getImageData(x0, y0, cw, ch).data;
+  const step = 4; // Her 4. pikseli örnekle
+  
+  // Renkleri HSL kutularına at (hız + doğruluk dengesi)
+  const buckets = {}; // "H_S_L" → count
+  for (let i = 0; i < data.length; i += 4 * step) {
+    const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+    if (a < 100) continue; // şeffaf pikselleri atla
+    const [h, s, l] = rgbToHsl(r, g, b);
+    const name = hslToColorName(Math.round(h), Math.round(s), Math.round(l));
+    buckets[name] = (buckets[name] || 0) + 1;
+  }
+
+  // En çok oy alan renk
+  let best = null, bestCount = 0;
+  for (const [name, count] of Object.entries(buckets)) {
+    if (count > bestCount) { bestCount = count; best = name; }
+  }
+  return best;
+}
+
+function cropDetections(dets, sourceImg) {
+  const PAD = 8;
+  dets.forEach((d, i) => {
+    const c = document.createElement('canvas');
+    const sx = Math.max(0, Math.floor(d.x - PAD));
+    const sy = Math.max(0, Math.floor(d.y - PAD));
+    const sw = Math.min(sourceImg.naturalWidth  - sx, Math.ceil(d.w + PAD*2));
+    const sh = Math.min(sourceImg.naturalHeight - sy, Math.ceil(d.h + PAD*2));
+    c.width  = sw;
+    c.height = sh;
+    c.getContext('2d').drawImage(sourceImg, sx, sy, sw, sh, 0, 0, sw, sh);
+    const detectedColor = getDominantColor(c) || '';
+    const dataUrl = c.toDataURL('image/jpeg', 0.92);
+    const fullName = detectedColor ? `${detectedColor} ${clsName(d.cls)}` : clsName(d.cls);
+    const item = {
+      id: Date.now() + '_' + i,
+      name: fullName,
+      detectedColor,
+      icon: clsIcon(d.cls),
+      conf: d.conf,
+      cls: d.cls,
+      color: COLORS[d.cls % COLORS.length],
+      dataUrl
+    };
+    // store color on detection for drawBoxes/showDetections
+    d.detectedColor = detectedColor;
+    d.fullName = fullName;
+    galleryItems.push(item);
+  });
+  renderGallery();
+}
+
+function renderGallery() {
+  const grid  = document.getElementById('galleryGrid');
+  const empty = document.getElementById('galleryEmpty');
+  const count = document.getElementById('galleryCount');
+  const clearBtn = document.getElementById('clearGalleryBtn');
+
+  if (!galleryItems.length) {
+    grid.style.display  = 'none';
+    empty.style.display = 'block';
+    count.textContent   = '';
+    clearBtn.style.display = 'none';
+    document.getElementById('downloadAllBtn').style.display = 'none';
+    return;
+  }
+
+  empty.style.display = 'none';
+  grid.style.display  = 'grid';
+  count.textContent   = galleryItems.length + ' öğe';
+  clearBtn.style.display = 'inline-block';
+  document.getElementById('downloadAllBtn').style.display = 'inline-block';
+
+  grid.innerHTML = galleryItems.slice().reverse().map(item => `
+    <div class="gallery-item" title="${item.name} — %${(item.conf*100).toFixed(1)}">
+      <div class="gallery-item-badge">${item.icon}</div>
+      <img src="${item.dataUrl}" alt="${item.name}">
+      <button class="gallery-item-dl" onclick="downloadItem('${item.id}')" title="İndir">⬇</button>
+      <div class="gallery-item-info">
+        <div class="gallery-item-name" style="color:${item.color}">${item.name}</div>
+        <div class="gallery-item-conf">%${(item.conf*100).toFixed(1)} güven</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function downloadItem(id) {
+  const item = galleryItems.find(i => i.id === id);
+  if (!item) return;
+  const a = document.createElement('a');
+  a.href = item.dataUrl;
+  a.download = `${item.name.replace(/\s+/g,'_')}_${(item.conf*100).toFixed(0)}pct.jpg`;
+  a.click();
+}
+
+function clearGallery() {
+  galleryItems = [];
+  renderGallery();
+}
+
+// Tümünü indir butonu için
+function downloadAll() {
+  galleryItems.forEach((item, idx) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = item.dataUrl;
+      a.download = `${item.name.replace(/\s+/g,'_')}_${idx+1}.jpg`;
+      a.click();
+    }, idx * 150);
+  });
+}
+
+// ═══════════════════════════════════════════════
+// CAMERA
+// ═══════════════════════════════════════════════
+let stream = null;
+
+async function toggleCamera() {
+  if (stream) { stopCamera(); return; }
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode:'environment', width:640, height:480 } });
+    document.getElementById('videoEl').srcObject = stream;
+    document.getElementById('cameraArea').classList.add('active');
+    document.querySelector('.drop-zone').style.display = 'none';
+    document.getElementById('camToggleBtn').textContent = '✕ Kamerayı Kapat';
+  } catch(e) {
+    setStatus('error', 'Kamera açılamadı: ' + e.message);
+  }
+}
+
+function stopCamera() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  document.getElementById('cameraArea').classList.remove('active');
+  document.querySelector('.drop-zone').style.display = '';
+  document.getElementById('camToggleBtn').textContent = '📷 Kamerayı Aç';
+}
+
+function captureFrame() {
+  const video = document.getElementById('videoEl');
+  const c = document.createElement('canvas');
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext('2d').drawImage(video, 0, 0);
+  showPreview(c.toDataURL('image/jpeg', 0.92));
+  stopCamera();
+}
+
+let countdownTimer = null;
+
+function startCountdown(seconds = 4) {
+  const overlay  = document.getElementById('countdownOverlay');
+  const numEl    = document.getElementById('countdownNum');
+  const btn      = document.getElementById('captureBtn');
+  const flash    = document.getElementById('flashOverlay');
+
+  // Zaten çalışıyorsa iptal et
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+    overlay.style.display = 'none';
+    btn.textContent = '📸 Çek & Analiz Et';
+    btn.onclick = startCountdown;
+    return;
+  }
+
+  overlay.style.display = 'flex';
+  btn.textContent = '✕ İptal';
+  btn.onclick = startCountdown; // tekrar tıklayınca iptal
+
+  let remaining = seconds;
+  numEl.textContent = remaining;
+
+  // Her saniye sayı güncelle
+  countdownTimer = setInterval(() => {
+    remaining--;
+    if (remaining <= 0) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+      overlay.style.display = 'none';
+      btn.textContent = '📸 Çek & Analiz Et';
+      btn.onclick = startCountdown;
+      // Flaş efekti
+      flash.style.display = 'block';
+      flash.style.opacity = '0.85';
+      flash.style.transition = 'none';
+      setTimeout(() => {
+        flash.style.transition = 'opacity 0.35s ease';
+        flash.style.opacity = '0';
+        setTimeout(() => { flash.style.display = 'none'; }, 380);
+      }, 80);
+      captureFrame();
+    } else {
+      // Ping animasyonu
+      numEl.style.transform = 'scale(1.35)';
+      numEl.textContent = remaining;
+      setTimeout(() => { numEl.style.transform = 'scale(1)'; }, 150);
+    }
+  }, 1000);
+}
+
+// ── init ──
+setStatus('warn', 'Model bekleniyor — best.onnx yükleyin');
+document.getElementById('loadSpinner').className = 'spinner';
+</script>
+</body>
+</html>
